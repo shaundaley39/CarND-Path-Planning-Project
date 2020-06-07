@@ -82,7 +82,7 @@ int main() {
           double end_path_s = j[1]["end_path_s"];
           double end_path_d = j[1]["end_path_d"];
 
-          // Sensor Fusion Data, a list of all other cars on the same side 
+          // Sensor Fusion Data, a list of all other cars on the same side
           //   of the road.
           auto sensor_fusion = j[1]["sensor_fusion"];
 
@@ -94,10 +94,72 @@ int main() {
           /**
            * TODO: define a path made up of (x,y) points that the car will visit
            *   sequentially every .02 seconds
-           */
-          // "stay in lane"
-          uint lane = 1;
-          double target_speed = 48.0;
+           * todo: adjust target lane to move around vehicles
+           *       - already implemented a simplified European approach, staying to the right and overtaking on the left but not caring about undertaking/ speed of vehicles to the left
+           *       - todo: implement chaotic & dangerous driving behaviour, with undertaking and lane switches in either direction for the vehicle to move ahead
+           * todo: generate smooth trajectories (satisfying constraints)
+           *       - acceleration towards target speed
+           *       - when the vehicle is slightly off-spline (whether due to new waypoints, or due to a lane change)
+          */
+
+          int lane = (12.0 - (double)car_d)/4.0;
+          double target_speed_mph = 48.0;
+          double target_speed_mps = 0.44704 * target_speed_mph;
+
+          // lane model
+          bool lane_accessible[3] = {true, true, true};
+          double lane_speed[3] = {target_speed_mps, target_speed_mps, target_speed_mps};
+          double lane_s_limit[3] = {car_s + 1000, car_s + 1000, car_s + 1000};
+          for (auto el : sensor_fusion){
+            int lane_idx = (12.0 - (double)el[6])/4.0;
+            double track_speed = pow(pow(el[3],2.0) + pow(el[4],2.0), 0.5);
+            double s = el[5];
+            if (car_s < 3500 && s > 5500) {s -=6945.554;}
+            if (car_s > 5500 && s < 3500) {s +=6945.554;}
+            if (s > car_s && s < lane_s_limit[lane_idx]){
+              lane_s_limit[lane_idx] = s;
+              lane_speed[lane_idx] = track_speed;
+            }
+            double s_diff = car_s - s;
+            if (s_diff > -8.0 && s_diff < 8.0 + 3.0*std::max(0.0, track_speed - car_speed)){
+              lane_accessible[lane_idx] = false;
+            }
+          }
+          double lane_s_free[3];
+          for (int i=0; i<3; i++){
+            lane_s_free[i] = std::max(lane_s_limit[i] - 12, lane_s_limit[i] - 12 - 1.6*(car_speed - lane_speed[i]));
+          }
+          // lane change?
+          /*
+            Aggressive European approach:
+            - stays to the right wherever possible
+            - moves left to overtake, where necessary and possible
+            - doesn't worry about undertaking/ going faster than vehicles to the left of it
+            This is not optimal in a free-for-all US highway. It would be optimal if everyone followed the same rules.
+          */
+          if (lane>0){
+            if (lane_accessible[lane-1] && (lane_s_free[lane-1] - car_s > 4 || lane_s_limit[lane-1] < car_s)){
+              lane--;
+            }
+          }
+          if (lane_s_free[lane] - car_s < 2){
+            if (lane<2){
+              if (lane_accessible[lane+1] && lane_s_free[lane+1] > lane_s_free[lane]){
+                lane++;
+              }
+            }
+          }
+          // speed adjustment to avoid rear-ending a vehicle in front?
+          if (lane_s_free[lane] - car_s < 0){
+            target_speed_mps = std::min(target_speed_mps,
+                                        lane_speed[lane] + 
+                                        (target_speed_mps - lane_speed[lane])*
+                                        ((car_s - lane_s_free[lane])/( lane_s_limit[lane] - lane_s_free[lane])));
+          }
+          // this is a crude sort of conditional PI controller to avoid a collision with the vehicle in front
+          if (lane_s_limit[lane] - car_s < 12.0){
+            target_speed_mps = std::min(target_speed_mps, lane_speed[lane] - (12 - (lane_s_limit[lane] - car_s)));
+          }
           int NWP = map_waypoints_x.size(); // should be 181 points
           vector<double> spline_x;
           vector<double> spline_y;
@@ -118,27 +180,18 @@ int main() {
           s_x.set_points(spline_s, spline_x);
           tk::spline s_y;
           s_y.set_points(spline_s, spline_y);
+
           // generate appropriately spaced points ahead of the vehicle position
           // this implementation does not yet consider the vehicle's current position!
-          double car_ss = (0!=wp_idx || car_s >= map_waypoints_s[0]) ? car_s : (car_s - 6945.554);
-          std::cout << "car s: " << car_ss <<std::endl;
+          double car_ss = (0!=wp_idx || (car_s >= map_waypoints_s[0] && car_s < 4500)) ? car_s : (car_s - 6945.554);
           int path_size = 100;
-          double d_ps = (0.020 * 0.44704 * target_speed);
+          double d_ps = (0.020 * target_speed_mps);
           for (int i = 0; i < path_size; i++){
-            // this can be dropped
             double s = car_ss + i*d_ps;
             next_x_vals.push_back(s_x(s));
             next_y_vals.push_back(s_y(s));
           }
 
-          // todo: slow down behind a vehicle in this lane
-          // todo: adjust target lane to move around vehicles
-          //       - implement European/ correct driving behaviour, with the vehicle keeping to the right wherever possible
-          //       - implement chaotic & dangerous driving behaviour, with undertaking and lane switches in either direction for the vehicle to move ahead
-          // todo: generate smooth trajectories (satisfying constraints)
-          //       - when the vehicle has the wrong speed
-          //       - when the vehicle is slightly off-spline (e.g. new waypoints)
-          //       - in a lane change
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;
 
