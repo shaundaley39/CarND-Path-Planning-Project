@@ -74,15 +74,15 @@ int main() {
   for(int i=0; i< NWP; i++){
     ospline_s.push_back(map_waypoints_s[i]);
     for(int l=0; l<3; l++){
-      ospline_x[l].push_back(map_waypoints_x[i] + (10 - 4 * l) * map_waypoints_dx[i]);
-      ospline_y[l].push_back(map_waypoints_y[i] + (10 - 4 *l) * map_waypoints_dy[i]);
+      ospline_x[l].push_back(map_waypoints_x[i] + (10.0 - 4.0 * l) * map_waypoints_dx[i]);
+      ospline_y[l].push_back(map_waypoints_y[i] + (10.0 - 4.0 *l) * map_waypoints_dy[i]);
     }
   }
-  for(int i=0; i< 0.3*NWP; i++){
+  for(int i=0; i< 0.05*NWP; i++){
     ospline_s.push_back(max_s + map_waypoints_s[i]);
     for(int l=0; l<3; l++){
-      ospline_x[l].push_back(map_waypoints_x[i] + (10 - 4 * l) * map_waypoints_dx[i]);
-      ospline_y[l].push_back(map_waypoints_y[i] + (10 - 4 *l) * map_waypoints_dy[i]);
+      ospline_x[l].push_back(map_waypoints_x[i] + (10.0 - 4.0 * l) * map_waypoints_dx[i]);
+      ospline_y[l].push_back(map_waypoints_y[i] + (10.0 - 4.0 *l) * map_waypoints_dy[i]);
     }
   }
   tk::spline os_x[3];
@@ -149,7 +149,7 @@ int main() {
             next_y_vals.push_back(y);
           }
 
-          bool generate_new_path_points = (previous_path_x.size() < 16);
+          bool generate_new_path_points = (previous_path_x.size() < 24);
     
     // How long is the remaining path? Update path_s
           for (int i=0; i<path_s.size(); i++){
@@ -171,10 +171,10 @@ int main() {
           }
 //         std::cout << "copied sizes, x,y,w: " << next_x_vals.size() << ", " << next_y_vals.size() << ", " << path_s.size() << std::endl;
           int path_s_size_prev = path_s.size();
-          if (path_s_size_prev > 0){
+ /*         if (path_s_size_prev > 0){
             std::cout<<"path s size: "<<path_s_size_prev<<" and previous path x size: "<<previous_path_x.size()<<std::endl;
             std::cout<<"car s: "<<car_s<<" and first path point s: "<<path_s[0]<<std::endl;
-          }
+          }*/
           int car_lane = (12.0 - (double)car_d)/4.0;
           int target_lane = car_lane;
           double target_speed_mph = 46.0;
@@ -239,17 +239,17 @@ int main() {
 
         // now, either generate a lane change maneuver or generate 8 path points
         std::vector<std::vector<double>> trajectory_s;
-        std::cout<<"switching"<< std::endl;
+//        std::cout<<"switching"<< std::endl;
         
         switch(car_state){
           case lane_change:
           {
-        std::cout<<"lane change"<< std::endl;
+ //       std::cout<<"lane change"<< std::endl;
             std::vector<std::vector<double>> trajectory_lane = getLaneShift(0, 4, 2, 2);
             double dt = 4.2;
             // target_speed_mps = std::min(lane_speed[target_lane], last_wp_vs + 4.0);
-            target_speed_mps -= 4.0;
-            double target_s = last_wp_s + dt * (0.2*last_wp_vs + 0.8*target_speed_mps);
+            target_speed_mps -= 2.0;
+            double target_s = last_wp_s + dt * (0.4*last_wp_vs + 0.6*target_speed_mps);
             trajectory_s = getTailTrajectory({last_wp_s, last_wp_vs, last_wp_as}, {target_s, target_speed_mps, 0.0}, dt);
             // this value ranges from 0 to 4, designating a weighted average of the former and target lanes
             int i_wp;
@@ -270,7 +270,7 @@ int main() {
           }
           case tail:
           {
-        std::cout<<"tail"<< std::endl;
+//        std::cout<<"tail"<< std::endl;
             target_speed_mps = std::min(target_speed_mps, lane_speed[car_lane]);
             if (fabs(last_wp_vs - target_speed_mps < 3)){
               double dt = 5;
@@ -281,7 +281,7 @@ int main() {
               trajectory_s = getTailTrajectory({last_wp_s, last_wp_vs, last_wp_as}, {target_s, target_speed_mps, 0.0}, dt);
               std::cout<<"new tail"<< std::endl;
               int i_wp;
-              for (i_wp = 0; i_wp < 24 - path_s_size_prev; i_wp++){
+              for (i_wp = 0; i_wp < 48 - path_s_size_prev; i_wp++){
                 double wp_s = trajectory_s[i_wp][0];
                 double wp_x = os_x[car_lane](wp_s);
                 double wp_y = os_y[car_lane](wp_s);
@@ -310,7 +310,7 @@ int main() {
               double dt = 5;
               double target_s = lane_s_limit[car_lane] + (dt+0.02*trajectory_s.size())*lane_speed[car_lane] - 12.0;
               trajectory_s = getTailTrajectory({last_wp_s, last_wp_vs, last_wp_as}, {target_s, target_speed_mps, 0.0}, dt);
-              for (i_wp = 0; i_wp < 24; i_wp++){
+              for (i_wp = 0; i_wp < 48; i_wp++){
                 double wp_s = trajectory_s[i_wp][0];
                 double wp_x = os_x[car_lane](wp_s);
                 double wp_y = os_y[car_lane](wp_s);
@@ -334,7 +334,7 @@ _lane]-car_s_f < 12){
             break;
             }
           case cruise:
-        std::cout<<"cruise"<< std::endl;
+//        std::cout<<"cruise"<< std::endl;
             trajectory_s = getTrajectory({last_wp_s, last_wp_vs, last_wp_as}, target_speed_mps, 7, 7);
         //    std::cout<<"trajectory size: "<< trajectory_s.size()<<std::endl;
           //  std::cout<<"final s,v,a: "<<trajectory_s[trajectory_s.size()-1][0] <<", "<<trajectory_s[trajectory_s.size()-1][1]<<", "<< trajectory_s[trajectory_s.size()-1][2]<<std::endl;
@@ -348,7 +348,7 @@ _lane]-car_s_f < 12){
             if( trajectory_s.size() < 25 - path_s_size_prev){
             //  std::cout<<"short trajectory: "<< trajectory_s.size()<<std::endl;
             }
-            for (i_wp = 0; i_wp < std::min((int)trajectory_s.size(), 24 - path_s_size_prev); i_wp++){
+            for (i_wp = 0; i_wp < std::min((int)trajectory_s.size(), 48 - path_s_size_prev); i_wp++){
               double wp_s = trajectory_s[i_wp][0];
               double wp_x = os_x[car_lane](wp_s);
               double wp_y = os_y[car_lane](wp_s);
