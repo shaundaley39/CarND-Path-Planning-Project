@@ -67,6 +67,7 @@ int main() {
   }
 
   // Spline generation
+/*
   int NWP = map_waypoints_x.size(); // should be 181 points
   vector<double> ospline_x[3];
   vector<double> ospline_y[3];
@@ -91,6 +92,54 @@ int main() {
     os_x[i].set_points(ospline_s, ospline_x[i]);
     os_y[i].set_points(ospline_s, ospline_y[i]);
   }
+*/
+  // Spline generation 2 - linear before cubic
+
+  int NWP = map_waypoints_x.size(); // should be 181 points
+  vector<double> ospline_x[3];
+  vector<double> ospline_y[3];
+  vector<double> ospline_s;
+  for(int i=0; i< NWP; i++){
+    ospline_s.push_back(map_waypoints_s[i]);
+    for(int l=0; l<3; l++){
+      ospline_x[l].push_back(map_waypoints_x[i] + (10.0 - 4.0 * l) * map_waypoints_dx[i]);
+      ospline_y[l].push_back(map_waypoints_y[i] + (10.0 - 4.0 *l) * map_waypoints_dy[i]);
+    }
+  }
+  for(int i=0; i< 0.05*NWP; i++){
+    ospline_s.push_back(max_s + map_waypoints_s[i]);
+    for(int l=0; l<3; l++){
+      ospline_x[l].push_back(map_waypoints_x[i] + (10.0 - 4.0 * l) * map_waypoints_dx[i]);
+      ospline_y[l].push_back(map_waypoints_y[i] + (10.0 - 4.0 *l) * map_waypoints_dy[i]);
+    }
+  }
+  tk::spline ls_x[3];
+  tk::spline ls_y[3];
+  for(int i=0; i<3; i++){
+    ls_x[i].set_points(ospline_s, ospline_x[i], false);
+    ls_y[i].set_points(ospline_s, ospline_y[i], false);
+  }
+
+  tk::spline os_x[3];
+  tk::spline os_y[3];
+  ospline_s.clear();
+  for(int i=0; i<3; i++){
+    ospline_x[i].clear();
+    ospline_y[i].clear();
+  }
+  for(int i=0; i< 4*NWP; i++){
+    double s = map_waypoints_s[0] + ((double)i * (map_waypoints_s[1]-map_waypoints_s[0]) / 3.0);
+    ospline_s.push_back(s);
+    for(int l=0; l<3; l++){
+      ospline_x[l].push_back(ls_x[l](s));
+      ospline_y[l].push_back(ls_y[l](s));
+    }
+  }
+  for(int i=0; i<3; i++){
+    os_x[i].set_points(ospline_s, ospline_x[i]);
+    os_y[i].set_points(ospline_s, ospline_y[i]);
+  }
+
 
   h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
                &map_waypoints_dx,&map_waypoints_dy, max_s, &last_wp_s, &last_wp_vs, &last_wp_as, &path_s, &car_state, &os_x, &os_y]
@@ -237,6 +286,55 @@ int main() {
         }
 
 
+  // Spline generation
+  vector<double> spline_x[3];
+  vector<double> spline_y[3];
+  vector<double> spline_s[3];
+
+  double x = (next_x_vals.size() < 1) ? car_x : next_x_vals[next_x_vals.size()-1];
+  double y = (next_y_vals.size() < 1) ? car_y : next_y_vals[next_y_vals.size()-1];
+
+  int closest_wp = ClosestWaypoint(x, y, map_waypoints_x, map_waypoints_y);
+  int NWP = map_waypoints_x.size(); // should be 181 points
+  bool add_path = previous_path_x.size() > 0;
+  bool path_added = false;
+  double last_s = car_s - 200;
+  for(int i=closest_wp-5; i< closest_wp+10; i++){
+    int idx = (i + NWP) % NWP; // the modulus operator is not treated equivalently across all compilers and architectures, hence this addition
+    double s_idx = map_waypoints_s[idx];
+    if(s_idx < 3500 && car_s > 5500){
+      s_idx += max_s;
+    } else if (car_s < 3500 && s_idx > 5500){
+      s_idx -= max_s;
+    }
+    for(int l=0; l<3; l++){
+      if(add_path && l==car_lane && !path_added && (path_s[0] < (s_idx+0.0001))){
+        for (int j=std::max(0, (int)path_s.size()-4); j<path_s.size(); j++){
+          if (path_s[j] > last_s + 0.0001){
+            spline_s[l].push_back(path_s[j]);
+            spline_x[l].push_back(previous_path_x[j]);
+            spline_y[l].push_back(previous_path_y[j]);
+            last_s = path_s[j];
+          }
+        }
+        if (path_s[path_s.size()-1] > (s_idx-0.0001)){
+          continue;
+        }
+      }
+      spline_s[l].push_back(s_idx);
+      spline_x[l].push_back(map_waypoints_x[idx] + (10.0 - 4.0 * l) * map_waypoints_dx[idx]);
+      spline_y[l].push_back(map_waypoints_y[idx] + (10.0 - 4.0 *l) * map_waypoints_dy[idx]);
+    }
+  }
+
+  tk::spline s_x[3];
+  tk::spline s_y[3];
+  for(int i=0; i<3; i++){
+    s_x[i].set_points(spline_s[i], spline_x[i]);
+    s_y[i].set_points(spline_s[i], spline_y[i]);
+  }
+
+
         // now, either generate a lane change maneuver or generate 8 path points
         std::vector<std::vector<double>> trajectory_s;
 //        std::cout<<"switching"<< std::endl;
@@ -294,7 +392,7 @@ int main() {
               last_wp_as = trajectory_s[i_wp-1][2];
 
             } else {
-              trajectory_s = getTrajectory({last_wp_s, last_wp_vs, last_wp_as}, target_speed_mps, 7,7);
+              trajectory_s = getTrajectory({last_wp_s, last_wp_vs, last_wp_as}, target_speed_mps, 6,6);
               int i_wp;
               for (i_wp = 0; i_wp < trajectory_s.size(); i_wp++){
                 double wp_s = trajectory_s[i_wp][0];
@@ -335,7 +433,7 @@ _lane]-car_s_f < 12){
             }
           case cruise:
 //        std::cout<<"cruise"<< std::endl;
-            trajectory_s = getTrajectory({last_wp_s, last_wp_vs, last_wp_as}, target_speed_mps, 7, 7);
+            trajectory_s = getTrajectory({last_wp_s, last_wp_vs, last_wp_as}, target_speed_mps, 6, 6);
         //    std::cout<<"trajectory size: "<< trajectory_s.size()<<std::endl;
           //  std::cout<<"final s,v,a: "<<trajectory_s[trajectory_s.size()-1][0] <<", "<<trajectory_s[trajectory_s.size()-1][1]<<", "<< trajectory_s[trajectory_s.size()-1][2]<<std::endl;
             double p_s = last_wp_s; //path_s[path_s.size()-1];
