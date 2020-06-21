@@ -1,75 +1,86 @@
 # CarND-Path-Planning-Project
 Self-Driving Car Engineer Nanodegree Program
-   
+
+## Path Planning - Problem Description
+
+In past projects we programmed and tuned controllers for vehicle actuators, to closely follow a target trajectory.
+In this project, we're treating that as a solved problem: the car will accurately follow any viable trajectory it is given.
+
+The challenge for this project then, is to generate viable trajectories for a vehicle which avoid collisions with other vehicles, which comply with road rules (not driving outside of road lanes except to shift between them, not exceeding the speed limit) and which satisfy comfort constraints (total acceleration less than 10 ms<sup>-2</sup>, total jerk less than 10 ms<sup>-3</sup>, including centripetal acceleration and jerk).
+
+This simulation provides a relatively simple environment: a three lane highway circuit with no intersections or traffic lights.
+The environment is fully mapped: the circuit route is modelled by a series of waypoints (with tangent vectors), with constant lane widths. The speed limit is constant (50 miles per hour).
+
+We assume localization to be a solved problem for the purpose of this project - we have fully accurate cartesian coordinates and orientation for our vehilce (provided by the simulator).
+
+We assume the detection and speed estimates of nearby vehicles to be a solved problem (this is provided directly by the simulator).
+Note however: other vehicles may (and do) change their speed erratically.
+Other vehicles may shift lanes (without warning, and indeed the simulator doesn't inform us that this is in the process of happening until the vehicle has actually shifted lane).
+This detection of "nearby" vehicles does not look very far, in particular for vehicles behind us when we are pulling out to overtake.
+Fortunately vehicles behind us are ralely going fast and so they slow down and give way where necessary.
+However, these limitations make responsible "Autobahn-style" driving impossible.
+Lanes, lane positions and speeds of nearby vehicles are treated as a "solved" problem then for this project, but a solved problem with evident limitations.
+
+## Implementation
+
+#### Spline
+
+To assist with generating trajectories along lanes, we generate an array of cubic spline models (one for each lane) using an appropriate [open source library](https://kluge.in-chemnitz.de/opensource/spline/spline.h).
+This is handled in lines 66-109 in [main.cpp](src/main.cpp).
+
+Note here: at first, a cubic spline was inferred directly using the 181 map waypoints for the track.
+While this resulted in visually correct behaviour (the vehicle drove seamlessly in the centre of its lane around the entire track), the simulator failed the car as driving "out of lane".
+The reason for this error was that the simulator (wrongly) judges the car as "out of lane" if it departs from a margin of the straight lines between successive waypoints.
+This was "solved" by generating additional waypoints halfway between each of the provided "map" waypoints.
+This slightly denser set of waypoints was sufficient to keep the car "in lane" according to the simulator's assessment, though in fact the vehicle now deviates more from the centre of its lane (judged visually).
+
+#### Lane Model
+
+For each planning cycle, the first interesting part of our code is the lane model update, seen in lines 190-215 in [main.cpp](src/main.cpp).
+
+We consider the state of the world at the end of the trajectory that our car is already planned to follow.
+For each lane, we approximate the "lane speed" as the speed of the next vehicle ahead of where our car will be (at the end of its prior trajectory), or as our target speed (46 miles per hour) if no such vehicle is detected.
+
+For each lane, we also calculate an "s limit" - the s-coordinates of vehicles ahead of our vehicle, at the moment our vehicle ends its prior trajectory.
+We also calculate (approximately) an "s free" position for each lane, which is the s-coordinate at which our car would have to begin decelerating to remain safely behind the next vehicle in that lane.
+Finally, for each lane we determine whether the lane is safe to enter ("lane accessible"), considering not only the space ahead of our car but also whether there are any vehicles adjacent to our car, or indeed somewhat behind our car but faster moving.
+
+#### Action Plan
+
+In lines 223-232, we use our lane model to decide what to do next.
+If there is a lane to the right of us which is accessible, and if there is no vehicle ahead of us in that lane for a substantial distance, we shift right.
+(This isn't a stipulated requirement for the project, but there's never an excuse for bad driving. Nobody should ever hog the middle lane or left lane.)
+
+Otherwise, if we are unconstrained in our current lane (the s position of our vehicle at the end of its previous trajectory is substantially less than the "s free" threshold), we can cruise at our target speed (46 miles per hour).
+
+If we are close to becoming constrained or we are already constrained in our current lane (the s position of our vehicle, at the end of its previous trajectory, is close to or less than the "s free" threshold for the car's lane), we will move left to a faster lane if possible (if the lane is accessible, and if any vehicles obstructing that lane are further away from us).
+
+Finally, if we are constrained in our current lane, we "track" the car ahead of us, aiming to maintain the same speed as it, keeping a little behind it so that we can drive more smoothly than the car in front and so we can break safely if necessary.
+
+#### Trajectory Generation
+
+From the above, we have an action plan of "track", "cruise" or "lane change" (with a target lane). In each case, we need to generate a trajectory that satisfies acceleration and jerk constraints. This is handled in lines 234-334 of [main.cpp](src/main.cpp).
+
+
+
+
+---
+
+# Practical Tips for Running this Project
+
 ### Simulator.
-You can download the Term3 Simulator which contains the Path Planning Project from the [releases tab (https://github.com/udacity/self-driving-car-sim/releases/tag/T3_v1.2).  
+The Term3 Simulator which contains the Path Planning Project from the [releases tab (https://github.com/udacity/self-driving-car-sim/releases/tag/T3_v1.2).
 
-To run the simulator on Mac/Linux, first make the binary file executable with the following command:
-```shell
-sudo chmod u+x {simulator_file_name}
-```
+The "linux" binary was specifically built for an Ubuntu target, and is confirmed to run well on Ubuntu 16 LTS. With most recent Ubuntu distributions (or other distros such as Fedora), this won't work.
+The version of Unity in which this simulator was written is no longer supported, does not run on any Linux distribution (although it builds for Ubuntu targets) and porting the simulator source code to more recent versions of Unity is non-trivial (many interfaces have been dropped or replaced and there have been changes to the environment mechanics). In short: if you only want to verify this project, it's probably best to temporarily set up a machine with an old Ubuntu distro to run the simulator.
 
-### Goals
-In this project your goal is to safely navigate around a virtual highway with other traffic that is driving +-10 MPH of the 50 MPH speed limit. You will be provided the car's localization and sensor fusion data, there is also a sparse map list of waypoints around the highway. The car should try to go as close as possible to the 50 MPH speed limit, which means passing slower traffic when possible, note that other cars will try to change lanes too. The car should avoid hitting other cars at all cost as well as driving inside of the marked road lanes at all times, unless going from one lane to another. The car should be able to make one complete loop around the 6946m highway. Since the car is trying to go 50 MPH, it should take a little over 5 minutes to complete 1 loop. Also the car should not experience total acceleration over 10 m/s^2 and jerk that is greater than 10 m/s^3.
-
-#### The map of the highway is in data/highway_map.txt
-Each waypoint in the list contains  [x,y,s,dx,dy] values. x and y are the waypoint's map coordinate position, the s value is the distance along the road to get to that waypoint in meters, the dx and dy values define the unit normal vector pointing outward of the highway loop.
-
-The highway's waypoints loop around so the frenet s value, distance along the road, goes from 0 to 6945.554.
-
-## Basic Build Instructions
+## Build Instructions
 
 1. Clone this repo.
 2. Make a build directory: `mkdir build && cd build`
 3. Compile: `cmake .. && make`
 4. Run it: `./path_planning`.
-
-Here is the data provided from the Simulator to the C++ Program
-
-#### Main car's localization Data (No Noise)
-
-["x"] The car's x position in map coordinates
-
-["y"] The car's y position in map coordinates
-
-["s"] The car's s position in frenet coordinates
-
-["d"] The car's d position in frenet coordinates
-
-["yaw"] The car's yaw angle in the map
-
-["speed"] The car's speed in MPH
-
-#### Previous path data given to the Planner
-
-//Note: Return the previous list but with processed points removed, can be a nice tool to show how far along
-the path has processed since last time. 
-
-["previous_path_x"] The previous list of x points previously given to the simulator
-
-["previous_path_y"] The previous list of y points previously given to the simulator
-
-#### Previous path's end s and d values 
-
-["end_path_s"] The previous list's last point's frenet s value
-
-["end_path_d"] The previous list's last point's frenet d value
-
-#### Sensor Fusion Data, a list of all other car's attributes on the same side of the road. (No Noise)
-
-["sensor_fusion"] A 2d vector of cars and then that car's [car's unique ID, car's x position in map coordinates, car's y position in map coordinates, car's x velocity in m/s, car's y velocity in m/s, car's s position in frenet coordinates, car's d position in frenet coordinates. 
-
-## Details
-
-1. The car uses a perfect controller and will visit every (x,y) point it recieves in the list every .02 seconds. The units for the (x,y) points are in meters and the spacing of the points determines the speed of the car. The vector going from a point to the next point in the list dictates the angle of the car. Acceleration both in the tangential and normal directions is measured along with the jerk, the rate of change of total Acceleration. The (x,y) point paths that the planner recieves should not have a total acceleration that goes over 10 m/s^2, also the jerk should not go over 50 m/s^3. (NOTE: As this is BETA, these requirements might change. Also currently jerk is over a .02 second interval, it would probably be better to average total acceleration over 1 second and measure jerk from that.
-
-2. There will be some latency between the simulator running and the path planner returning a path, with optimized code usually its not very long maybe just 1-3 time steps. During this delay the simulator will continue using points that it was last given, because of this its a good idea to store the last points you have used so you can have a smooth transition. previous_path_x, and previous_path_y can be helpful for this transition since they show the last points given to the simulator controller with the processed points already removed. You would either return a path that extends this previous path or make sure to create a new path that has a smooth transition with this last path.
-
-## Tips
-
-A really helpful resource for doing this project and creating smooth trajectories was using http://kluge.in-chemnitz.de/opensource/spline/, the spline function is in a single hearder file is really easy to use.
-
----
+5. Run the simulator (discussed above)
 
 ## Dependencies
 
@@ -92,54 +103,6 @@ A really helpful resource for doing this project and creating smooth trajectorie
     git checkout e94b6e1
     ```
 
-## Editor Settings
-
-We've purposefully kept editor configuration files out of this repo in order to
-keep it as simple and environment agnostic as possible. However, we recommend
-using the following settings:
-
-* indent using spaces
-* set tab width to 2 spaces (keeps the matrices in source code aligned)
-
 ## Code Style
 
-Please (do your best to) stick to [Google's C++ style guide](https://google.github.io/styleguide/cppguide.html).
-
-## Project Instructions and Rubric
-
-Note: regardless of the changes you make, your project must be buildable using
-cmake and make!
-
-
-## Call for IDE Profiles Pull Requests
-
-Help your fellow students!
-
-We decided to create Makefiles with cmake to keep this project as platform
-agnostic as possible. Similarly, we omitted IDE profiles in order to ensure
-that students don't feel pressured to use one IDE or another.
-
-However! I'd love to help people get up and running with their IDEs of choice.
-If you've created a profile for an IDE that you think other students would
-appreciate, we'd love to have you add the requisite profile files and
-instructions to ide_profiles/. For example if you wanted to add a VS Code
-profile, you'd add:
-
-* /ide_profiles/vscode/.vscode
-* /ide_profiles/vscode/README.md
-
-The README should explain what the profile does, how to take advantage of it,
-and how to install it.
-
-Frankly, I've never been involved in a project with multiple IDE profiles
-before. I believe the best way to handle this would be to keep them out of the
-repo root to avoid clutter. My expectation is that most profiles will include
-instructions to copy files to a new location to get picked up by the IDE, but
-that's just a guess.
-
-One last note here: regardless of the IDE used, every submitted project must
-still be compilable with cmake and make./
-
-## How to write a README
-A well written README file can enhance your project and portfolio.  Develop your abilities to create professional README files by completing [this free course](https://www.udacity.com/course/writing-readmes--ud777).
-
+It would be ideal to closely follow [Google's C++ style guide](https://google.github.io/styleguide/cppguide.html).
