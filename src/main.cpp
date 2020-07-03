@@ -7,8 +7,8 @@
 #include "Eigen-3.3/Eigen/QR"
 #include "Eigen-3.3/Eigen/Dense"
 #include "helpers.h"
-#include "json.hpp"
 #include "spline.h"
+#include "json.hpp"
 #include "trajectory.h"
 
 // for convenience
@@ -16,7 +16,7 @@ using nlohmann::json;
 using std::string;
 using std::vector;
 
-enum CarState {cruise, tail, lane_change};
+enum CarState {cruise, tail};
 
 
 int main() {
@@ -29,10 +29,14 @@ int main() {
   vector<double> map_waypoints_dx;
   vector<double> map_waypoints_dy;
 
-  // Waypoint map to read from
+            // generate a path, combining the car's prior trajectory and the path for the target lane
+            // Waypoint map to read from
   string map_file_ = "../data/highway_map.csv";
   // The max s value before wrapping around the track back to 0
   const double max_s = 6945.554;
+
+  // we will be computing paths and trajectories in a 2 dimensional plane
+  const int D=2;
 
   // state of last waypoint
   double last_p_s = 0;
@@ -42,6 +46,7 @@ int main() {
   vector<double> path_s = {};
 
   std::ifstream in_map_(map_file_.c_str(), std::ifstream::in);
+  int car_lane = 1;
 
   string line;
   while (getline(in_map_, line)) {
@@ -64,54 +69,34 @@ int main() {
   }
 
   int NWP = map_waypoints_x.size(); // should be 181 points
-  vector<double> ospline_x[3];
-  vector<double> ospline_y[3];
   vector<double> ospline_s;
+  vector<std::array<double, D>> ospline[3];
   for(int i=0; i< NWP; i++){
     ospline_s.push_back(map_waypoints_s[i]);
     for(int l=0; l<3; l++){
-      ospline_x[l].push_back(map_waypoints_x[i] + (10.0 - 4.0 * l) * map_waypoints_dx[i]);
-      ospline_y[l].push_back(map_waypoints_y[i] + (10.0 - 4.0 *l) * map_waypoints_dy[i]);
+      double x = map_waypoints_x[i] + (10.0 - 4.0 * l) * map_waypoints_dx[i];
+      double y = map_waypoints_y[i] + (10.0 - 4.0 *l) * map_waypoints_dy[i];
+      ospline[l].push_back({x,y});
     }
   }
-  for(int i=0; i< 0.05*NWP; i++){
+  for(int i=0; i< 0.1*NWP; i++){
     ospline_s.push_back(max_s + map_waypoints_s[i]);
     for(int l=0; l<3; l++){
-      ospline_x[l].push_back(map_waypoints_x[i] + (10.0 - 4.0 * l) * map_waypoints_dx[i]);
-      ospline_y[l].push_back(map_waypoints_y[i] + (10.0 - 4.0 *l) * map_waypoints_dy[i]);
+      double x = map_waypoints_x[i] + (10.0 - 4.0 * l) * map_waypoints_dx[i];
+      double y = map_waypoints_y[i] + (10.0 - 4.0 *l) * map_waypoints_dy[i];
+      ospline[l].push_back({x,y});
     }
   }
-  tk::spline ls_x[3];
-  tk::spline ls_y[3];
-  for(int i=0; i<3; i++){
-    ls_x[i].set_points(ospline_s, ospline_x[i], false);
-    ls_y[i].set_points(ospline_s, ospline_y[i], false);
-  }
-
-  tk::spline os_x[3];
-  tk::spline os_y[3];
-  ospline_s.clear();
-  for(int i=0; i<3; i++){
-    ospline_x[i].clear();
-    ospline_y[i].clear();
-  }
-  for(int i=0; i< 2.6*NWP; i++){
-    double s = map_waypoints_s[0] + ((double)i * (map_waypoints_s[1]-map_waypoints_s[0]) / 2.0);
-    ospline_s.push_back(s);
-    for(int l=0; l<3; l++){
-      ospline_x[l].push_back(ls_x[l](s));
-      ospline_y[l].push_back(ls_y[l](s));
-    }
-  }
-  for(int i=0; i<3; i++){
-    os_x[i].set_points(ospline_s, ospline_x[i]);
-    os_y[i].set_points(ospline_s, ospline_y[i]);
+  tk::spline<D> os[3];
+  for(int l=0; l<3; l++){
+    os[l].set_points(ospline_s, ospline[l], false);
   }
 
   h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
-               &map_waypoints_dx,&map_waypoints_dy, max_s, &last_wp_s, &last_wp_vs, &last_wp_as, &path_s, &os_x, &os_y]
+               &map_waypoints_dx,&map_waypoints_dy, max_s, &last_wp_s, &last_wp_vs, &last_wp_as, &path_s, &os, &car_lane]
               (uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                uWS::OpCode opCode) {
+    const int D=2;
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
     // The 2 signifies a websocket event
@@ -131,6 +116,7 @@ int main() {
           double car_d = j[1]["d"];
           double car_yaw = j[1]["yaw"];
           double car_speed = j[1]["speed"];
+          CarState car_state = cruise;
 
           // Previous path data given to the Planner
           auto previous_path_x = j[1]["previous_path_x"];
@@ -154,32 +140,36 @@ int main() {
           for (double y : previous_path_y){
             next_y_vals.push_back(y);
           }
-
-          bool generate_new_path_points = (previous_path_x.size() < 24);
+          if (previous_path_x.size() < 24){
     
           // How long is the remaining path? Update path_s
-          bool adjusting_path_s = false;
-          for (int i=0; i<path_s.size(); i++){
-            if(car_s < 3500 && path_s[i] > 5500){
-              path_s[i] -= max_s;
-              adjusting_path_s = true;
-            }
-          }
-          if(adjusting_path_s){
-            last_wp_s -= max_s;
-          }
           if (path_s.size() > previous_path_x.size()){
             path_s.erase(path_s.begin(), path_s.begin() + path_s.size()-previous_path_x.size());
           }
           int path_s_size_prev = path_s.size();
-          int car_lane = (12.0 - (double)car_d)/4.0;
-          int target_lane = car_lane;
-          double target_speed_mph = 46.0;
-          double target_speed_mps = 0.44704 * target_speed_mph;
           if(0==path_s_size_prev){
             last_wp_s = car_s;
             last_wp_vs = car_speed;
+          } else {
+            double offset = car_s - path_s[0];
+            for (int i=0; i<path_s.size(); i++){
+              path_s[i] += offset;
+            }
+            last_wp_s += offset;
           }
+
+          // current car_lane update where appropriate, and target_lane init
+          int new_lane = (12.0 - car_d)/4.0;
+          car_lane = new_lane;
+/*
+          if (fabs((double)new_lane - (12.0 - car_d)/4.0) < 0.5){
+            car_lane = new_lane;
+          }
+*/
+          int target_lane = car_lane;
+
+          double target_speed_mph = 49.5;
+          double target_speed_mps = 0.44704 * target_speed_mph;
 
     
           //
@@ -194,7 +184,7 @@ int main() {
           double lane_s_limit[3] = {car_s + 2000, car_s + 2000, car_s + 2000};
           for (auto el : sensor_fusion){
             int lane_idx = (12.0 - (double)el[6])/4.0;
-            double track_speed = pow(pow(el[3],2.0) + pow(el[4],2.0), 0.5);
+            double track_speed = std::max(0.0, pow(pow(el[3],2.0) + pow(el[4],2.0), 0.5));
             double s = (double)el[5] + detla_t*track_speed; // projecting time forward to end of the previous path
             if (car_s < 3500 && s > 5500) {s -=max_s;}
             if (car_s > 5500 && s < 3500) {s +=max_s;}
@@ -205,35 +195,84 @@ int main() {
               }
             }
             double s_diff = car_s_f - s;
-            if (s_diff > -8.0 && s_diff < 8.0 + 3.0*std::max(0.0, track_speed - last_wp_vs)){
+            if (s_diff > -12.0 && s_diff < 10.0){
               lane_accessible[lane_idx] = false;
             }
           }
           double lane_s_free[3];
           for (int i=0; i<3; i++){
-            lane_s_free[i] = std::min(lane_s_limit[i] - 12, lane_s_limit[i] - 12 - 1.6*(last_wp_vs - lane_speed[i]));
+            lane_s_free[i] = std::min(lane_s_limit[i] - 15, lane_s_limit[i] - 15 - 1.6*fabs(last_wp_vs - lane_speed[i]));
           }
 
           // State transition: cruise, tail, laneshift
           //
           // if cruise or tail and space exists, laneshift to the right
-          if (generate_new_path_points){
           //  std::cout<<"generating some path points"<< std::endl;
+          int points_to_generate = 48 - path_s_size_prev;
             car_state = cruise;
-          if (lane_s_free[car_lane] - car_s_f < 0){
+          if (car_lane > 0 && last_wp_vs > 10.0 && lane_accessible[car_lane-1] && (lane_s_free[car_lane-1] - car_s_f > 14 || lane_s_limit[car_lane-1] < car_s_f)){
+            target_lane = car_lane -1;
+            points_to_generate = 128;
+          } else if (car_lane<2 && lane_accessible[car_lane+1] && lane_s_free[car_lane+1] > lane_s_free[car_lane] && lane_s_free[car_lane] - car_s_f < 4.0){
+            target_lane = car_lane + 1;
+            points_to_generate = 128;
+          }
+          if (std::min(lane_s_free[car_lane], lane_s_free[target_lane]) - car_s_f < 0){
             car_state = tail;
           }
-          if (car_lane > 0 && last_wp_vs > 10.0 && lane_accessible[car_lane-1] && (lane_s_free[car_lane-1] - car_s_f > 8 || lane_s_limit[car_lane-1] < car_s_f)){
-            target_lane = car_lane -1;
-            car_state = lane_change;
-          } else if (car_lane<2 && lane_accessible[car_lane+1] && lane_s_free[car_lane+1] > lane_s_free[car_lane] && car_lane < 3 && lane_s_free[car_lane] - car_s_f < 2){
-            target_lane = car_lane + 1;
-            car_state = lane_change;
+
+
+          // generate a path, combining the car's prior trajectory and the path for the target lane
+          tk::spline<D> nos;
+          double curvature = 1.0;
+          double ns = 50.0; // was 8, and probably should be around 8. Was 32, but exceeded max acceleration on curves
+          std::cout<<"creating a path now"<<std::endl;
+          while (curvature > 5.0/(target_speed_mps*target_speed_mps)){
+            std::cout<<"actually creating a path"<<std::endl;
+            std::vector<std::array<double, D>> npath_points;
+            std::vector<double> npath_s;
+            int inserted=0;
+            if(path_s.size()==0){
+              npath_points.push_back({car_x, car_y});
+              npath_s.push_back(car_s);
+              inserted++;
+            } else {
+		    for(int i=0; i<path_s.size(); i++){
+		      std::cout<<"loop"<<std::endl;
+		      if(npath_s.size()==0 || path_s[i] > 0.05 + npath_s[npath_s.size()-1]){
+			npath_points.push_back({previous_path_x[i],previous_path_y[i]});
+			npath_s.push_back(path_s[i]);
+			inserted++;
+		      }
+		      std::cout<<"not this time: "<<path_s[i] <<std::endl;
+		    }
+            }
+            double s= (0==path_s.size())? car_s : path_s[path_s.size()-1];
+            s += ns;
+            for(int i=0; i<5; i++){
+              npath_points.push_back({os[target_lane](s)[0], os[target_lane](s)[1]});
+              npath_s.push_back(s);
+              s+=16.0;
+            }
+            for(int i=0; i< npath_s.size(); i++){
+              std::cout<<"s: "<<npath_s[i]<<std::endl;
+            }
+            nos.set_points(npath_s, npath_points);
+            nos.normalize_path(inserted-1);
+//            nos.normalize_path();
+            curvature = nos.max_path_curvature(npath_s[0]+0.1, npath_s[npath_s.size()-2]-0.1);
+            std::cout<<"curvature: "<<curvature<<" which should be less than: "<<5.0/(target_speed_mps*target_speed_mps)<<std::endl;
+            ns *= 1.5;
+            curvature=0; //remove this and make sure it really works
           }
+          std::cout<<"or maybe not?"<<std::endl;
+
           // now, either generate a lane change maneuver or generate 8 path points
           std::vector<std::vector<double>> trajectory_s;
+
         
           switch(car_state){
+/*
             case lane_change:
             {
               std::vector<std::vector<double>> trajectory_lane = getLaneShift(0, 4, 2, 2);
@@ -241,7 +280,6 @@ int main() {
               target_speed_mps -= 2.0;
               if(lane_s_free[target_lane] + dt* lane_speed[target_lane]  < last_wp_s + dt*target_speed_mps){
                 target_speed_mps = std::min(target_speed_mps, lane_speed[target_lane]);
-                target_speed_mps = std::max(target_speed_mps, 0.0);
               }
               double target_s = last_wp_s + dt * (0.4*last_wp_vs + 0.6*target_speed_mps);
               trajectory_s = getTailTrajectory({last_wp_s, last_wp_vs, last_wp_as}, {target_s, target_speed_mps, 0.0}, dt);
@@ -260,67 +298,41 @@ int main() {
               last_wp_as = trajectory_s[i_wp-1][2];
               break;
             }
+*/
             case tail:
             {
-              target_speed_mps = std::min(target_speed_mps, lane_speed[car_lane]);
-              if (fabs(last_wp_vs - target_speed_mps < 3)){
-                double dt = 5;
-                double target_s = lane_s_limit[car_lane] + dt*lane_speed[car_lane] - 10.0;
-                if ((target_s - last_wp_s)/dt > (last_wp_vs + 3)){
-                  target_s = (last_wp_vs+3)*dt;
-                }
-                trajectory_s = getTailTrajectory({last_wp_s, last_wp_vs, last_wp_as}, {target_s, target_speed_mps, 0.0}, dt);
-                int i_wp;
-                for (i_wp = 0; i_wp < 48 - path_s_size_prev; i_wp++){
-                  double wp_s = trajectory_s[i_wp][0];
-                  double wp_x = os_x[car_lane](wp_s);
-                  double wp_y = os_y[car_lane](wp_s);
-                  path_s.push_back(wp_s);
-                  next_x_vals.push_back(wp_x);
-                  next_y_vals.push_back(wp_y);
-                }
-                last_wp_s = trajectory_s[i_wp-1][0];
-                last_wp_vs = trajectory_s[i_wp-1][1];
-                last_wp_as = trajectory_s[i_wp-1][2];
-              } else {
-                trajectory_s = getTrajectory({last_wp_s, last_wp_vs, last_wp_as}, target_speed_mps, 6,6);
-                int i_wp;
-                for (i_wp = 0; i_wp < trajectory_s.size(); i_wp++){
-                  double wp_s = trajectory_s[i_wp][0];
-                  double wp_x = os_x[car_lane](wp_s);
-                  double wp_y = os_y[car_lane](wp_s);
-                  path_s.push_back(wp_s);
-                  next_x_vals.push_back(wp_x);
-                  next_y_vals.push_back(wp_y);
-                }
-                last_wp_s = trajectory_s[i_wp-1][0];
-                last_wp_vs = trajectory_s[i_wp-1][1];
-                last_wp_as = trajectory_s[i_wp-1][2];
-                double dt = 5;
-                double target_s = lane_s_limit[car_lane] + (dt+0.02*trajectory_s.size())*lane_speed[car_lane] - 12.0;
-                trajectory_s = getTailTrajectory({last_wp_s, last_wp_vs, last_wp_as}, {target_s, target_speed_mps, 0.0}, dt);
-                for (i_wp = 0; i_wp < 48; i_wp++){
-                  double wp_s = trajectory_s[i_wp][0];
-                  double wp_x = os_x[car_lane](wp_s);
-                  double wp_y = os_y[car_lane](wp_s);
-                  path_s.push_back(wp_s);
-                  next_x_vals.push_back(wp_x);
-                  next_y_vals.push_back(wp_y);
-                }
-                last_wp_s = trajectory_s[i_wp-1][0];
-                last_wp_vs = trajectory_s[i_wp-1][1];
-                last_wp_as = trajectory_s[i_wp-1][2];
+              target_speed_mps = lane_speed[car_lane];
+              double dt = 5;
+              double target_s = lane_s_limit[car_lane] + dt*lane_speed[car_lane] - 12.0;
+              target_s = std::min(target_s, last_wp_s + dt*0.6*(last_wp_vs+target_speed_mps));
+              target_s = std::max(target_s, last_wp_s + pow(last_wp_vs, 2.0)/10);
+              trajectory_s = getTailTrajectory({last_wp_s, last_wp_vs, last_wp_as}, {target_s, target_speed_mps, 0.0}, dt);
+              int i_wp;
+              for (i_wp = 0; i_wp <  std::min((int)trajectory_s.size(), points_to_generate); i_wp++){
+                double wp_s = trajectory_s[i_wp][0];
+//                double wp_x = os_x[car_lane](wp_s);
+//                double wp_y = os_y[car_lane](wp_s);
+                double wp_x = nos(wp_s)[0];
+                double wp_y = nos(wp_s)[1];
+                path_s.push_back(wp_s);
+                next_x_vals.push_back(wp_x);
+                next_y_vals.push_back(wp_y);
               }
+              last_wp_s = trajectory_s[i_wp-1][0];
+              last_wp_vs = trajectory_s[i_wp-1][1];
+              last_wp_as = trajectory_s[i_wp-1][2];
               break;
-              }
+            }
             case cruise:
               trajectory_s = getTrajectory({last_wp_s, last_wp_vs, last_wp_as}, target_speed_mps, 6, 6);
-              double p_s = last_wp_s; //path_s[path_s.size()-1];
+              double p_s = last_wp_s;
               int i_wp;
-              for (i_wp = 0; i_wp < std::min((int)trajectory_s.size(), 48 - path_s_size_prev); i_wp++){
+              for (i_wp = 0; i_wp < std::min((int)trajectory_s.size(), points_to_generate); i_wp++){
                 double wp_s = trajectory_s[i_wp][0];
-                double wp_x = os_x[car_lane](wp_s);
-                double wp_y = os_y[car_lane](wp_s);
+//                double wp_x = os_x[car_lane](wp_s);
+//                double wp_y = os_y[car_lane](wp_s);
+                double wp_x = nos(wp_s)[0];
+                double wp_y = nos(wp_s)[1];
                 path_s.push_back(wp_s);
                 next_x_vals.push_back(wp_x);
                 next_y_vals.push_back(wp_y);
