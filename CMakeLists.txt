@@ -21,6 +21,11 @@ link_directories(/usr/local/Cellar/libuv/1.11.0/lib)
 endif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin") 
 
 
+include_directories( ${CMAKE_SOURCE_DIR}/src/boost )
+file( GLOB_RECURSE LIBSRCS *.c *.cpp *.cc *.h *.hpp )
+add_library( ${PROJECT_NAME} STATIC ${LIBSRCS} )
+
+
 add_executable(path_planning ${sources})
 
 target_link_libraries(path_planning z ssl uv uWS)

@@ -168,7 +168,7 @@ int main() {
 */
           int target_lane = car_lane;
 
-          double target_speed_mph = 49.5;
+          double target_speed_mph = 49.3;
           double target_speed_mps = 0.44704 * target_speed_mph;
 
     
