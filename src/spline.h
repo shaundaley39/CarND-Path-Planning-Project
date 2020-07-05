@@ -33,7 +33,6 @@
 #include <algorithm>
 #include <array>
 #include <math.h>
-#include "boost/boost/math/quadrature/gauss.hpp"
 //#include <boost/math/quadrature/gauss.hpp>
 #include <boost/math/quadrature/gauss_kronrod.hpp>
 
