@@ -66,6 +66,7 @@ int main() {
 
   // construct an array of 2D (cubic spline) paths for the 3-lane highway we want to drive along
   vector<double> ospline_s;
+  const int D=2;
   vector<std::array<double, D>> ospline[3];
   for(int i=0; i< map_waypoints_x.size(); i++){
     ospline_s.push_back(map_waypoints_s[i]);
@@ -84,7 +85,6 @@ int main() {
     }
   }
   // we will be computing paths and trajectories on a 2 dimensional plane
-  const int D=2;
   tk::spline<D> os[3];
   for(int l=0; l<3; l++){
     os[l].set_points(ospline_s, ospline[l], false);
