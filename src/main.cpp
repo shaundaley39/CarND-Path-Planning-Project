@@ -47,6 +47,8 @@ int main() {
 
   std::ifstream in_map_(map_file_.c_str(), std::ifstream::in);
   int car_lane = 1;
+  int target_lane = 1;
+  bool lane_change_abort = false;
 
   string line;
   while (getline(in_map_, line)) {
@@ -93,7 +95,7 @@ int main() {
   }
 
   h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
-               &map_waypoints_dx,&map_waypoints_dy, max_s, &last_wp_s, &last_wp_vs, &last_wp_as, &path_s, &os, &car_lane]
+               &map_waypoints_dx,&map_waypoints_dy, max_s, &last_wp_s, &last_wp_vs, &last_wp_as, &path_s, &os, &car_lane, &target_lane, &lane_change_abort]
               (uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                uWS::OpCode opCode) {
     const int D=2;
@@ -140,7 +142,8 @@ int main() {
           for (double y : previous_path_y){
             next_y_vals.push_back(y);
           }
-          if (previous_path_x.size() < 24){
+          //if (previous_path_x.size() < 24){
+          if(true){
     
           // How long is the remaining path? Update path_s
           if (path_s.size() > previous_path_x.size()){
@@ -161,14 +164,13 @@ int main() {
           // current car_lane update where appropriate, and target_lane init
           int new_lane = (12.0 - car_d)/4.0;
           car_lane = new_lane;
-/*
-          if (fabs((double)new_lane - (12.0 - car_d)/4.0) < 0.5){
-            car_lane = new_lane;
-          }
-*/
-          int target_lane = car_lane;
 
-          double target_speed_mph = 49.3;
+          if (fabs((double)new_lane - (12.0 - car_d)/4.0) < 0.5){
+            lane_change_abort = false;
+          }
+
+
+          double target_speed_mph = 49.0;
           double target_speed_mps = 0.44704 * target_speed_mph;
 
     
@@ -178,7 +180,7 @@ int main() {
           // - for car_s, car_speed, t, lane, is the lane accessible?
           // - what is the lane_s, lane_v for tailing at time t?
           double car_s_f = (path_s.size() == 0)? car_s : path_s[path_s.size()-1];
-          double detla_t = 0.02* path_s.size();
+          double detla_t = 0.02*std::max(0.0, (double)(path_s.size()-1));
           bool lane_accessible[3] = {true, true, true};
           double lane_speed[3] = {target_speed_mps, target_speed_mps, target_speed_mps};
           double lane_s_limit[3] = {car_s + 2000, car_s + 2000, car_s + 2000};
@@ -186,8 +188,9 @@ int main() {
             int lane_idx = (12.0 - (double)el[6])/4.0;
             double track_speed = std::max(0.0, pow(pow(el[3],2.0) + pow(el[4],2.0), 0.5));
             double s = (double)el[5] + detla_t*track_speed; // projecting time forward to end of the previous path
-            if (car_s < 3500 && s > 5500) {s -=max_s;}
-            if (car_s > 5500 && s < 3500) {s +=max_s;}
+            double so = (double)el[5]; // without projection
+            if (car_s < 3500 && s > 5500) {s -=max_s; so -=max_s;}
+            if (car_s > 5500 && s < 3500) {s +=max_s; so +=max_s;}
             if (s > car_s_f && s < lane_s_limit[lane_idx]){
               lane_s_limit[lane_idx] = s;
               if (0.0 <= track_speed && track_speed < target_speed_mps){
@@ -195,37 +198,50 @@ int main() {
               }
             }
             double s_diff = car_s_f - s;
-            if (s_diff > -12.0 && s_diff < 10.0){
+            double so_diff = car_s - so;
+            if ((s_diff > -12.0 && s_diff < 12.0) || (so_diff > -12.0 && so_diff < 12.0)){
               lane_accessible[lane_idx] = false;
             }
           }
           double lane_s_free[3];
           for (int i=0; i<3; i++){
-            lane_s_free[i] = std::min(lane_s_limit[i] - 15, lane_s_limit[i] - 15 - 1.6*fabs(last_wp_vs - lane_speed[i]));
+            lane_s_free[i] = std::min(lane_s_limit[i] - 20, lane_s_limit[i] - 20 - 1.6*fabs(last_wp_vs - lane_speed[i]));
           }
 
-          // State transition: cruise, tail, laneshift
+          // State transition: cruise, tail
           //
           // if cruise or tail and space exists, laneshift to the right
           //  std::cout<<"generating some path points"<< std::endl;
-          int points_to_generate = 48 - path_s_size_prev;
-            car_state = cruise;
-          if (car_lane > 0 && last_wp_vs > 10.0 && lane_accessible[car_lane-1] && (lane_s_free[car_lane-1] - car_s_f > 14 || lane_s_limit[car_lane-1] < car_s_f)){
-            target_lane = car_lane -1;
-            points_to_generate = 128;
-          } else if (car_lane<2 && lane_accessible[car_lane+1] && lane_s_free[car_lane+1] > lane_s_free[car_lane] && lane_s_free[car_lane] - car_s_f < 4.0){
-            target_lane = car_lane + 1;
-            points_to_generate = 128;
+//          int points_to_generate = 48 - path_s_size_prev;
+          int points_to_generate = 32 - path_s_size_prev;
+
+          if (target_lane == car_lane && !lane_change_abort){
+            if (car_s_f + 10 < lane_s_limit[car_lane]){
+            if (car_lane > 0 && last_wp_vs > 10.0 && lane_accessible[car_lane-1] && (lane_s_free[car_lane-1] - car_s_f > 14 || lane_s_limit[car_lane-1] < car_s_f)){
+              target_lane = car_lane -1;
+            } else if (car_lane<2 && lane_accessible[car_lane+1] && lane_s_free[car_lane+1] > lane_s_free[car_lane] && lane_s_free[car_lane] - car_s_f < 4.0){
+              target_lane = car_lane + 1;
+            }
+            }
+          } else {
+            if (!lane_accessible[target_lane]){
+// let's not abort lane changes - how do things look now?
+//              target_lane = car_lane;
+//              lane_change_abort = true;
+            }
           }
-          if (std::min(lane_s_free[car_lane], lane_s_free[target_lane]) - car_s_f < 0){
+
+          if (lane_s_free[target_lane] - car_s_f < 0 || (16.0/last_wp_vs)*std::max(0.0, last_wp_vs-lane_speed[car_lane]) > std::max(0.0, (lane_s_limit[car_lane] - car_s_f)) ){
             car_state = tail;
+          } else {
+            car_state = cruise;
           }
 
 
           // generate a path, combining the car's prior trajectory and the path for the target lane
           tk::spline<D> nos;
           double curvature = 1.0;
-          double ns = 50.0; // was 8, and probably should be around 8. Was 32, but exceeded max acceleration on curves
+          double path_offset = (target_lane==car_lane && !lane_change_abort)? 16.0 : 50.0;
           std::cout<<"creating a path now"<<std::endl;
           while (curvature > 5.0/(target_speed_mps*target_speed_mps)){
             std::cout<<"actually creating a path"<<std::endl;
@@ -248,7 +264,7 @@ int main() {
 		    }
             }
             double s= (0==path_s.size())? car_s : path_s[path_s.size()-1];
-            s += ns;
+            s += path_offset;
             for(int i=0; i<5; i++){
               npath_points.push_back({os[target_lane](s)[0], os[target_lane](s)[1]});
               npath_s.push_back(s);
@@ -262,7 +278,7 @@ int main() {
 //            nos.normalize_path();
             curvature = nos.max_path_curvature(npath_s[0]+0.1, npath_s[npath_s.size()-2]-0.1);
             std::cout<<"curvature: "<<curvature<<" which should be less than: "<<5.0/(target_speed_mps*target_speed_mps)<<std::endl;
-            ns *= 1.5;
+//           path_offset *= 1.5;
             curvature=0; //remove this and make sure it really works
           }
           std::cout<<"or maybe not?"<<std::endl;
@@ -301,17 +317,15 @@ int main() {
 */
             case tail:
             {
-              target_speed_mps = lane_speed[car_lane];
+              target_speed_mps = std::min(lane_speed[target_lane], lane_speed[car_lane]);
               double dt = 5;
-              double target_s = lane_s_limit[car_lane] + dt*lane_speed[car_lane] - 12.0;
+              double target_s = std::min( lane_s_limit[target_lane] + dt*lane_speed[target_lane] - 16.0, lane_s_limit[car_lane] + dt*lane_speed[car_lane] - 16.0);
               target_s = std::min(target_s, last_wp_s + dt*0.6*(last_wp_vs+target_speed_mps));
-              target_s = std::max(target_s, last_wp_s + pow(last_wp_vs, 2.0)/10);
+              target_s = std::max(target_s, last_wp_s + pow(last_wp_vs, 2.0)/(10*dt));
               trajectory_s = getTailTrajectory({last_wp_s, last_wp_vs, last_wp_as}, {target_s, target_speed_mps, 0.0}, dt);
               int i_wp;
               for (i_wp = 0; i_wp <  std::min((int)trajectory_s.size(), points_to_generate); i_wp++){
                 double wp_s = trajectory_s[i_wp][0];
-//                double wp_x = os_x[car_lane](wp_s);
-//                double wp_y = os_y[car_lane](wp_s);
                 double wp_x = nos(wp_s)[0];
                 double wp_y = nos(wp_s)[1];
                 path_s.push_back(wp_s);
@@ -329,8 +343,6 @@ int main() {
               int i_wp;
               for (i_wp = 0; i_wp < std::min((int)trajectory_s.size(), points_to_generate); i_wp++){
                 double wp_s = trajectory_s[i_wp][0];
-//                double wp_x = os_x[car_lane](wp_s);
-//                double wp_y = os_y[car_lane](wp_s);
                 double wp_x = nos(wp_s)[0];
                 double wp_y = nos(wp_s)[1];
                 path_s.push_back(wp_s);
