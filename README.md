@@ -23,20 +23,17 @@ Lanes, lane positions and speeds of nearby vehicles are treated as a "solved" pr
 
 ## Implementation
 
-#### Spline
+#### Lane Paths
 
-To assist with generating trajectories along lanes, we generate an array of cubic spline models (one for each lane) using an appropriate [open source library](https://kluge.in-chemnitz.de/opensource/spline/spline.h).
-This is handled in lines 66-109 in [main.cpp](src/main.cpp).
+To follow a highway in one of its three lanes (with the possibility of shifting between lanes), it's necessary to have a model of the paths of these highway lanes. To do this, we use a spline model based upon this [open source library](https://kluge.in-chemnitz.de/opensource/spline/spline.h), but extended to support paths through multidimensional spaces plus other features that will be relevant later on. The implementation can be found in [spline.h](src/spline.h).
 
-Note here: at first, a cubic spline was inferred directly using the 181 map waypoints for the track.
-While this resulted in visually correct behaviour (the vehicle drove seamlessly in the centre of its lane around the entire track), the simulator failed the car as driving "out of lane".
-The reason for this error was that the simulator (wrongly) judges the car as "out of lane" if it departs from a margin of the straight lines between successive waypoints.
-This was "solved" by generating additional waypoints halfway between each of the provided "map" waypoints.
-This slightly denser set of waypoints was sufficient to keep the car "in lane" according to the simulator's assessment, though in fact the vehicle now deviates more from the centre of its lane (judged visually).
+In lines 67-91 of [main.cpp](src/main.cpp) we take map data and construct an array of 2-dimensional splines, providing real value parameterized paths for each of the three highway lanes. Note that straight line interpolation is used - this produces an inferior result to piecewise cubic interpolation (visible swaying of the car as it passes each map waypoint, and greater deviation from the centre of the lane), however the automated assessment of whether a car is in its lane is based on a margin about the straight line between waypoints. Unfortunately, it was necessary to use straight line interpolation to pass this test.
+
+Note also that we extend this path model 10% beyond the wrap-around s value. This simplifies trajectory generation.
 
 #### Lane Model
 
-For each planning cycle, the first interesting part of our code is the lane model update, seen in lines 190-215 in [main.cpp](src/main.cpp).
+For each planning cycle, the first interesting part of our code is the lane model update, seen in lines 164-191 in [main.cpp](src/main.cpp).
 
 We consider the state of the world at the end of the trajectory that our car is already planned to follow.
 For each lane, we approximate the "lane speed" as the speed of the next vehicle ahead of where our car will be (at the end of its prior trajectory), or as our target speed (46 miles per hour) if no such vehicle is detected.
@@ -47,21 +44,31 @@ Finally, for each lane we determine whether the lane is safe to enter ("lane acc
 
 #### Action Plan
 
-In lines 223-232, we use our lane model to decide what to do next.
+In lines 193-210 of [main.cpp](src/main.cpp), we use our lane model to decide what to do next.
 If there is a lane to the right of us which is accessible, and if there is no vehicle ahead of us in that lane for a substantial distance, we shift right.
 (This isn't a stipulated requirement for the project, but there's never an excuse for bad driving. Nobody should ever hog the middle lane or left lane.)
 
-Otherwise, if we are unconstrained in our current lane (the s position of our vehicle at the end of its previous trajectory is substantially less than the "s free" threshold), we can cruise at our target speed (46 miles per hour).
-
 If we are close to becoming constrained or we are already constrained in our current lane (the s position of our vehicle, at the end of its previous trajectory, is close to or less than the "s free" threshold for the car's lane), we will move left to a faster lane if possible (if the lane is accessible, and if any vehicles obstructing that lane are further away from us).
 
-Finally, if we are constrained in our current lane, we "track" the car ahead of us, aiming to maintain the same speed as it, keeping a little behind it so that we can drive more smoothly than the car in front and so we can break safely if necessary.
+If we are unconstrained in our current lane (the s position of our vehicle at the end of its previous trajectory is substantially less than the "s free" threshold), we can cruise at our target speed (46 miles per hour).
+
+Finally, if we are constrained in our current lane, we "tail" the car ahead of us, aiming to maintain the same speed as it, keeping a little behind it so that we can drive more smoothly than the car in front and so we can break safely if necessary.
+
+#### Path Generation
+
+In lines 212-239 of [main.cpp](src/main.cpp), we use the points of the car's pre-existing trajectory, and points from the lane path of the target lane (obtained in "Lane Paths" above), to generate a new path. This time, piecewise cubic spline interpolation is used to obtain a smooth path with low curvature, ensuring a sufficiently low centripetal acceleration at the car's target speed. Arc length normalization is used to re-parameterize this path, from the last point of the prior trajectory onwards. This enables us to directly use this path to generate a steady speed trajectory (without surprising jerk or acceleration) in the next step.
 
 #### Trajectory Generation
 
-From the above, we have an action plan of "track", "cruise" or "lane change" (with a target lane). In each case, we need to generate a trajectory that satisfies acceleration and jerk constraints. This is handled in lines 234-334 of [main.cpp](src/main.cpp).
+From the above, we have an action plan of "track" or "cruise", and a path to follow. In each case, we need to generate a trajectory that satisfies longitudinal acceleration and jerk constraints (if we've made the right decisions so far, we also avoid collisions). This is handled in lines 241-283 of [main.cpp](src/main.cpp), which in turn makes use of [trajectory.h](src/trajectory.h).
 
+## See it in Action
 
+[![path planning](https://img.youtube.com/vi/JJeE8X6CXis/0.jpg)](https://www.youtube.com/watch?v=JJeE8X6CXis)
+
+## Potential for Improvement
+
+This is a one-off project with no goal beyond learning and play - it takes many shortcuts (e.g. using BCP to pull a small subset of Boost straight into this project's source tree!) and this is clearly not clean or maintainable. Some needs became clear however: it would be great to have a well written "paths" and "trajectories" libraries. It would be great to pursue a more rigorous approach to ensure satisfaction of constraints. In too many places, thresholds are used as approximate/ rule-of-thumb values for decisions; every one of these thresholds raises questions, and suggests the potential for a more elegant, more optimal and potentially safer solution.
 
 
 ---

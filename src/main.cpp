@@ -64,12 +64,10 @@ int main() {
     map_waypoints_dy.push_back(d_y);
   }
 
-  int NWP = map_waypoints_x.size(); // should be 181 points
-
   // construct an array of 2D (cubic spline) paths for the 3-lane highway we want to drive along
   vector<double> ospline_s;
   vector<std::array<double, D>> ospline[3];
-  for(int i=0; i< NWP; i++){
+  for(int i=0; i< map_waypoints_x.size(); i++){
     ospline_s.push_back(map_waypoints_s[i]);
     for(int l=0; l<3; l++){
       double x = map_waypoints_x[i] + (10.0 - 4.0 * l) * map_waypoints_dx[i];
@@ -77,7 +75,7 @@ int main() {
       ospline[l].push_back({x,y});
     }
   }
-  for(int i=0; i< 0.1*NWP; i++){
+  for(int i=0; i< 0.1*map_waypoints_x.size(); i++){
     ospline_s.push_back(max_s + map_waypoints_s[i]);
     for(int l=0; l<3; l++){
       double x = map_waypoints_x[i] + (10.0 - 4.0 * l) * map_waypoints_dx[i];
@@ -210,7 +208,6 @@ int main() {
           } else {
             car_state = cruise;
           }
-
 
           // generate a path, combining the car's prior trajectory and the path for the target lane
           tk::spline<D> nos;
